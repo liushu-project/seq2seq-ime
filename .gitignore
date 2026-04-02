@@ -11,5 +11,6 @@ wheels/
 
 data/
 log/
+checkpoints/
 
 .DS_Store

@@ -5,6 +5,7 @@ import re
 import random
 import time
 import math
+import os
 
 import torch
 import torch.nn as nn
@@ -56,7 +57,7 @@ def readLangs(lang1, lang2):
         read().strip().split('\n')
 
     # Split every line into pairs and normalize
-    pairs = ((s for s in l.split('\t')) for l in lines)
+    pairs = [[s for s in l.split('\t')] for l in lines]
 
     return input_lang, output_lang, pairs
 
@@ -67,13 +68,13 @@ def filterPair(p):
         len(p[1].split(' ')) < MAX_LENGTH
 
 def filterPairs(pairs):
-    return (pair for pair in pairs if filterPair(pair))
+    return [pair for pair in pairs if filterPair(pair)]
 
 def prepareData(lang1, lang2):
     input_lang, output_lang, pairs = readLangs(lang1, lang2)
-    # print("Read %s sentence pairs" % len(pairs))
+    print("Read %s sentence pairs" % len(pairs))
     pairs = filterPairs(pairs)
-    # print("Trimmed to %s sentence pairs" % len(pairs))
+    print("Trimmed to %s sentence pairs" % len(pairs))
     print("Counting words...")
     for pair in pairs:
         input_lang.addSentence(pair[0])
@@ -82,8 +83,6 @@ def prepareData(lang1, lang2):
     print(input_lang.name, input_lang.n_words)
     print(output_lang.name, output_lang.n_words)
     return input_lang, output_lang, pairs
-
-input_lang, output_lang, pairs = prepareData('zh', 'pinyin')
 
 class EncoderRNN(nn.Module):
     def __init__(self, input_size, hidden_size, dropout_p=0.1):
@@ -215,7 +214,7 @@ def tensorsFromPair(pair):
     return (input_tensor, target_tensor)
 
 def get_dataloader(batch_size):
-    input_lang, output_lang, pairs = prepareData('zh', 'pinyin', True)
+    input_lang, output_lang, pairs = prepareData('pinyin', 'zh')
 
     n = len(list(pairs))
     input_ids = np.zeros((n, MAX_LENGTH), dtype=np.int32)
@@ -274,7 +273,10 @@ def timeSince(since, percent):
     rs = es - s
     return '%s (- %s)' % (asMinutes(s), asMinutes(rs))
 
-def save_checkpoint(epoch, encoder, decoder, encoder_optimizer, decoder_optimizer, loss, filepath="checkpoint.pth"):
+def save_checkpoint(epoch, encoder, decoder, encoder_optimizer, decoder_optimizer, loss,
+                    checkpoint_dir="checkpoints"):
+    os.makedirs(checkpoint_dir, exist_ok=True)
+    filepath = os.path.join(checkpoint_dir, f"checkpoint_epoch{epoch}.pth")
     torch.save({
         'epoch': epoch,
         'encoder_state_dict': encoder.state_dict(),
@@ -297,7 +299,8 @@ def load_checkpoint(filepath, encoder, decoder, encoder_optimizer, decoder_optim
     return start_epoch
 
 def train(train_dataloader, encoder, decoder, n_epochs, learning_rate=0.001,
-          print_every=100, checkpoint_every=10, resume_from=None):
+          print_every=100, checkpoint_every=10, checkpoint_dir="checkpoints",
+          resume_from=None):
     start = time.time()
     print_loss_total = 0  # Reset every print_every
 
@@ -320,12 +323,13 @@ def train(train_dataloader, encoder, decoder, n_epochs, learning_rate=0.001,
             print('%s (%d %d%%) %.4f' % (timeSince(start, epoch / n_epochs),
                                         epoch, epoch / n_epochs * 100, print_loss_avg))
         if epoch % checkpoint_every == 0:
-            save_checkpoint(epoch, encoder, decoder, encoder_optimizer, 
-                            decoder_optimizer, loss, f"checkpoint_epoch{epoch}.pth")
+            save_checkpoint(epoch, encoder, decoder, encoder_optimizer,
+                            decoder_optimizer, loss, checkpoint_dir)
 
-    # 最终保存一次
-    save_checkpoint(n_epochs, encoder, decoder, encoder_optimizer, 
-                    decoder_optimizer, loss, "checkpoint_final.pth")
+    # 最终保存
+    final_path = os.path.join(checkpoint_dir, "checkpoint_final.pth")
+    save_checkpoint(n_epochs, encoder, decoder, encoder_optimizer,
+                    decoder_optimizer, loss, checkpoint_dir)
 
 hidden_size = 128
 batch_size = 32
