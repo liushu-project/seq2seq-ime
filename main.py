@@ -159,7 +159,7 @@ class AttnDecoderRNN(nn.Module):
         self.out = nn.Linear(hidden_size, output_size)
         self.dropout = nn.Dropout(dropout_p)
 
-    def forward(self, encoder_outputs, encoder_hidden, target_tensor=None):
+    def forward(self, encoder_outputs, encoder_hidden, target_tensor=None, teacher_forcing_ration=0.5):
         batch_size = encoder_outputs.size(0)
         decoder_input = torch.empty(batch_size, 1, dtype=torch.long, device=device).fill_(SOS_token)
         decoder_hidden = encoder_hidden
@@ -173,7 +173,7 @@ class AttnDecoderRNN(nn.Module):
             decoder_outputs.append(decoder_output)
             attentions.append(attn_weights)
 
-            if target_tensor is not None:
+            if target_tensor is not None and random.random() < teacher_forcing_ration:
                 # Teacher forcing: Feed the target as the next input
                 decoder_input = target_tensor[:, i].unsqueeze(1) # Teacher forcing
             else:
@@ -236,7 +236,7 @@ def get_dataloader(batch_size):
     return input_lang, output_lang, train_dataloader
 
 def train_epoch(dataloader, encoder, decoder, encoder_optimizer,
-          decoder_optimizer, criterion):
+          decoder_optimizer, criterion, teacher_forcing_ration=0.5):
 
     total_loss = 0
     for data in dataloader:
@@ -246,7 +246,7 @@ def train_epoch(dataloader, encoder, decoder, encoder_optimizer,
         decoder_optimizer.zero_grad()
 
         encoder_outputs, encoder_hidden = encoder(input_tensor)
-        decoder_outputs, _, _ = decoder(encoder_outputs, encoder_hidden, target_tensor)
+        decoder_outputs, _, _ = decoder(encoder_outputs, encoder_hidden, target_tensor, teacher_forcing_ration)
 
         loss = criterion(
             decoder_outputs.view(-1, decoder_outputs.size(-1)),
@@ -300,7 +300,7 @@ def load_checkpoint(filepath, encoder, decoder, encoder_optimizer, decoder_optim
 
 def train(train_dataloader, encoder, decoder, n_epochs, learning_rate=0.001,
           print_every=100, checkpoint_every=10, checkpoint_dir="checkpoints",
-          resume_from=None):
+          resume_from=None, tf_ratio_start=1.0, tf_ratio_end=0.1):
     start = time.time()
     print_loss_total = 0  # Reset every print_every
 
@@ -314,14 +314,18 @@ def train(train_dataloader, encoder, decoder, n_epochs, learning_rate=0.001,
                                       encoder_optimizer, decoder_optimizer)
 
     for epoch in range(start_epoch, n_epochs + 1):
-        loss = train_epoch(train_dataloader, encoder, decoder, encoder_optimizer, decoder_optimizer, criterion)
+        tf_ratio = tf_ratio_start - (tf_ratio_start - tf_ratio_end) * (epoch - 1) / (n_epochs - 1)
+        loss = train_epoch(train_dataloader, encoder, decoder, encoder_optimizer, decoder_optimizer, criterion, tf_ratio)
         print_loss_total += loss
 
         if epoch % print_every == 0:
             print_loss_avg = print_loss_total / print_every
             print_loss_total = 0
-            print('%s (%d %d%%) %.4f' % (timeSince(start, epoch / n_epochs),
-                                        epoch, epoch / n_epochs * 100, print_loss_avg))
+            print('%s (%d %d%%) %.4f  tf_ratio=%.2f' % (
+                timeSince(start, epoch / n_epochs),
+                epoch, epoch / n_epochs * 100,
+                print_loss_avg, tf_ratio))
+
         if epoch % checkpoint_every == 0:
             save_checkpoint(epoch, encoder, decoder, encoder_optimizer,
                             decoder_optimizer, loss, checkpoint_dir)
@@ -331,44 +335,13 @@ def train(train_dataloader, encoder, decoder, n_epochs, learning_rate=0.001,
     save_checkpoint(n_epochs, encoder, decoder, encoder_optimizer,
                     decoder_optimizer, loss, checkpoint_dir)
 
-hidden_size = 128
-batch_size = 32
+hidden_size = 256
+batch_size = 200
 
 input_lang, output_lang, train_dataloader = get_dataloader(batch_size)
 
 encoder = EncoderRNN(input_lang.n_words, hidden_size).to(device)
 decoder = AttnDecoderRNN(hidden_size, output_lang.n_words).to(device)
 
-train(train_dataloader, encoder, decoder, 80, print_every=5)
+train(train_dataloader, encoder, decoder, 100, print_every=5)
 
-# def evaluate(encoder, decoder, sentence, input_lang, output_lang):
-#     with torch.no_grad():
-#         input_tensor = tensorFromSentence(input_lang, sentence)
-
-#         encoder_outputs, encoder_hidden = encoder(input_tensor)
-#         decoder_outputs, decoder_hidden, decoder_attn = decoder(encoder_outputs, encoder_hidden)
-
-#         _, topi = decoder_outputs.topk(1)
-#         decoded_ids = topi.squeeze()
-
-#         decoded_words = []
-#         for idx in decoded_ids:
-#             if idx.item() == EOS_token:
-#                 decoded_words.append('<EOS>')
-#                 break
-#             decoded_words.append(output_lang.index2word[idx.item()])
-#     return decoded_words, decoder_attn
-
-# def evaluateRandomly(encoder, decoder, n=10):
-#     for i in range(n):
-#         pair = random.choice(pairs)
-#         print('>', pair[0])
-#         print('=', pair[1])
-#         output_words, _ = evaluate(encoder, decoder, pair[0], input_lang, output_lang)
-#         output_sentence = ' '.join(output_words)
-#         print('<', output_sentence)
-#         print('')
-
-# encoder.eval()
-# decoder.eval()
-# evaluateRandomly(encoder, decoder)

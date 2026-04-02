@@ -149,7 +149,8 @@ def tensorFromSentence(lang, sentence):
     return torch.tensor(indexes, dtype=torch.long, device=device).view(1, -1)
 
 
-def evaluate(encoder, decoder, sentence, input_lang, output_lang):
+def evaluate(encoder, decoder, sentence, input_lang, output_lang,
+             repetition_penalty=1.3):
     encoder.eval()
     decoder.eval()
     with torch.no_grad():
@@ -157,14 +158,19 @@ def evaluate(encoder, decoder, sentence, input_lang, output_lang):
         encoder_outputs, encoder_hidden = encoder(input_tensor)
         decoder_outputs, _, attn_weights = decoder(encoder_outputs, encoder_hidden)
 
-        _, topi = decoder_outputs.topk(1)
-        decoded_ids = topi.squeeze()
-
+        logits = decoder_outputs.squeeze(0)  # [MAX_LENGTH, vocab_size]
         decoded_words = []
-        for idx in decoded_ids:
-            if idx.item() == EOS_token:
+        generated_ids = set()
+
+        for step in range(logits.size(0)):
+            step_logits = logits[step].clone()
+            for prev_id in generated_ids:
+                step_logits[prev_id] /= repetition_penalty
+            token_id = step_logits.argmax().item()
+            if token_id == EOS_token:
                 break
-            decoded_words.append(output_lang.index2word[idx.item()])
+            decoded_words.append(output_lang.index2word[token_id])
+            generated_ids.add(token_id)
 
     return decoded_words, attn_weights
 
